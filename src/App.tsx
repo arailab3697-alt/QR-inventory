@@ -211,8 +211,6 @@ function App() {
         }
       })
     }
-
-    setScanSeed((value) => value + 1)
   }
 
   useEffect(() => {
@@ -287,9 +285,10 @@ function App() {
           ) {
             try {
               const detected = await localDetector.detect(currentVideo)
-              const barcode = detected[0]
-              if (barcode?.rawValue) {
-                observeCode(barcode.rawValue, 'camera', barcode.cornerPoints)
+              for (const barcode of detected) {
+                if (barcode?.rawValue) {
+                  observeCode(barcode.rawValue, 'camera', barcode.cornerPoints)
+                }
               }
             } catch {
               setScanStatus('error')
