@@ -1,6 +1,6 @@
 {
   "reagents": [
-    { "id": "A1B2", "name": "Acetone", "shelf": "青棚A" },
+    { "id": "7UDP", "name": "Acetone", "shelf": "青棚A" },
     { "id": "C3D4", "name": "Ethanol", "shelf": "青棚A" },
     { "id": "28V 1A2", "name": "Isopropanol", "shelf": "青棚A" },
     { "id": "X9Y8", "name": "Water", "shelf": "青棚A" },

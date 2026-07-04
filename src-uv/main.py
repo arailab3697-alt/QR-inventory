@@ -133,6 +133,7 @@ def make_parser() -> argparse.ArgumentParser:
     encrypt = subparsers.add_parser("encrypt", help="Encrypt a plain inventory JSON file.")
     encrypt.add_argument("input", nargs="?", default=ROOT / "data" / "plain.json", type=Path)
     encrypt.add_argument("output", nargs="?", default=ROOT / "encrypted.json", type=Path)
+    encrypt.add_argument("--ts", action="store_true", help="Output as TypeScript file.")
     encrypt.add_argument("--password", help="Password used to encrypt the payload.")
 
     decrypt = subparsers.add_parser("decrypt", help="Decrypt an encrypted inventory JSON file.")
@@ -152,7 +153,11 @@ def main() -> None:
     if args.command == "encrypt":
         payload = normalize_inventory(read_json(args.input))
         envelope = encrypt_inventory(payload, password)
-        write_json(args.output, asdict(envelope))
+        if args.ts:
+            content = f"const encryptedInventory = {json.dumps(asdict(envelope), indent=2)};\n\nexport default encryptedInventory;\n"
+            args.output.write_text(content, encoding="utf-8")
+        else:
+            write_json(args.output, asdict(envelope))
         return
 
     envelope = InventoryEnvelope(**read_json(args.input))
