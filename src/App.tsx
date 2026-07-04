@@ -288,7 +288,7 @@ function App() {
     }
 
     frameListRef.current = [
-      ...frameListRef.current.filter((f) => now - (f.at ?? 0) < 1500),
+      ...frameListRef.current.filter((f) => now - (f.at ?? 0) < 300),
       frame,
     ]
 
