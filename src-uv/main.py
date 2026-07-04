@@ -131,14 +131,14 @@ def make_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     encrypt = subparsers.add_parser("encrypt", help="Encrypt a plain inventory JSON file.")
-    encrypt.add_argument("input", nargs="?", default=ROOT / "data" / "plain.json", type=Path)
+    encrypt.add_argument("input", nargs="?", default=ROOT / "private" / "reagents.json", type=Path)
     encrypt.add_argument("output", nargs="?", default=ROOT / "encrypted.json", type=Path)
     encrypt.add_argument("--ts", action="store_true", help="Output as TypeScript file.")
     encrypt.add_argument("--password", help="Password used to encrypt the payload.")
 
     decrypt = subparsers.add_parser("decrypt", help="Decrypt an encrypted inventory JSON file.")
     decrypt.add_argument("input", nargs="?", default=ROOT / "encrypted.json", type=Path)
-    decrypt.add_argument("output", nargs="?", default=ROOT / "plain.json", type=Path)
+    decrypt.add_argument("output", nargs="?", default=ROOT / "reagents.json", type=Path)
     decrypt.add_argument("--password", help="Password used to decrypt the payload.")
 
     return parser
