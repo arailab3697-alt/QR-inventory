@@ -11,7 +11,7 @@
     { "id": "D5E6", "name": "PBS", "shelf": "冷蔵庫" },
     { "id": "F7G8", "name": "EDTA", "shelf": "冷蔵庫" },
     { "id": "28V X9Z", "name": "Glycerol", "shelf": "冷凍庫" },
-    { "id": "K1L2", "name": "DMSO", "shelf": "冷凍庫" },
+    { "id": "K1L3", "name": "DMSO", "shelf": "冷凍庫" },
     { "id": "M3N4", "name": "Protein marker", "shelf": "冷凍庫" }
   ]
 }
