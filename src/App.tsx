@@ -33,6 +33,7 @@ type ScanFrame = {
   reagent?: Reagent
   source: 'camera' | 'manual'
   cornerPoints?: ScanCorner[]
+  at?: number
 }
 
 type DetectedBarcode = {
@@ -73,7 +74,7 @@ function App() {
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const frameRef = useRef<ScanFrame | null>(null)
+  const frameListRef = useRef<ScanFrame[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const detectorRef = useRef<InstanceType<NonNullable<Window['BarcodeDetector']>> | null>(
     null,
@@ -137,6 +138,7 @@ function App() {
     }
 
     detectorRef.current = null
+    frameListRef.current = []
 
     const stream = streamRef.current
     if (stream) {
@@ -183,9 +185,14 @@ function App() {
       reagent,
       source,
       cornerPoints,
+      at: now,
     }
 
-    frameRef.current = frame
+    frameListRef.current = [
+      ...frameListRef.current.filter((f) => now - (f.at ?? 0) < 1500),
+      frame,
+    ]
+
     setLastFeedback({
       raw: frame.raw,
       matched,
@@ -367,8 +374,10 @@ function App() {
         raw: '',
         matched: false,
         source: 'camera',
+        at: Date.now(),
       }
-      const frame = frameRef.current ?? fallbackFrame
+      const frames = frameListRef.current.length > 0 ? frameListRef.current : [fallbackFrame]
+
       const hasVideo = video.videoWidth > 0 && video.videoHeight > 0
       const scale = hasVideo
         ? Math.max(width / video.videoWidth, height / video.videoHeight)
@@ -377,44 +386,47 @@ function App() {
       const renderHeight = hasVideo ? video.videoHeight * scale : height
       const offsetX = (width - renderWidth) / 2
       const offsetY = (height - renderHeight) / 2
-      const accent = frame.matched ? '#47e6b1' : '#f0b349'
 
       context.strokeStyle = 'rgba(255, 255, 255, 0.14)'
       context.lineWidth = 1
       context.strokeRect(12, 12, width - 24, height - 24)
 
-      context.strokeStyle = accent
-      context.fillStyle = frame.matched
-        ? 'rgba(71, 230, 177, 0.14)'
-        : 'rgba(240, 179, 73, 0.12)'
-      context.lineWidth = 3
+      for (const frame of frames) {
+        const accent = frame.matched ? '#47e6b1' : '#f0b349'
+        context.strokeStyle = accent
+        context.fillStyle = frame.matched
+          ? 'rgba(71, 230, 177, 0.14)'
+          : 'rgba(240, 179, 73, 0.12)'
+        context.lineWidth = 3
 
-      if (frame.cornerPoints?.length === 4) {
-        const mapPoint = ({ x, y }: ScanCorner) => ({
-          x: offsetX + x * scale,
-          y: offsetY + y * scale,
-        })
-        const points = frame.cornerPoints.map(mapPoint)
-        context.beginPath()
-        context.moveTo(points[0].x, points[0].y)
-        for (let index = 1; index < points.length; index += 1) {
-          context.lineTo(points[index].x, points[index].y)
+        if (frame.cornerPoints?.length === 4) {
+          const mapPoint = ({ x, y }: ScanCorner) => ({
+            x: offsetX + x * scale,
+            y: offsetY + y * scale,
+          })
+          const points = frame.cornerPoints.map(mapPoint)
+          context.beginPath()
+          context.moveTo(points[0].x, points[0].y)
+          for (let index = 1; index < points.length; index += 1) {
+            context.lineTo(points[index].x, points[index].y)
+          }
+          context.closePath()
+          context.fill()
+          context.stroke()
+        } else if (frame === frames[0] && frame.raw === '') {
+          // Pulse animation for the center if no frames are detected
+          const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 240)
+          const boxWidth = Math.min(width * 0.56, 340)
+          const boxHeight = Math.min(height * 0.28, 160)
+          const left = (width - boxWidth) / 2
+          const top = (height - boxHeight) / 2
+          context.save()
+          context.globalAlpha = 0.7 + pulse * 0.2
+          context.setLineDash([12, 10])
+          context.strokeRect(left, top, boxWidth, boxHeight)
+          context.fillRect(left, top, boxWidth, boxHeight)
+          context.restore()
         }
-        context.closePath()
-        context.fill()
-        context.stroke()
-      } else {
-        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 240)
-        const boxWidth = Math.min(width * 0.56, 340)
-        const boxHeight = Math.min(height * 0.28, 160)
-        const left = (width - boxWidth) / 2
-        const top = (height - boxHeight) / 2
-        context.save()
-        context.globalAlpha = 0.7 + pulse * 0.2
-        context.setLineDash([12, 10])
-        context.strokeRect(left, top, boxWidth, boxHeight)
-        context.fillRect(left, top, boxWidth, boxHeight)
-        context.restore()
       }
 
       context.fillStyle = 'rgba(6, 10, 16, 0.82)'
@@ -422,7 +434,7 @@ function App() {
       context.fillStyle = '#edf2ff'
       context.font = '600 13px system-ui, sans-serif'
       context.fillText(
-        frame.raw ? frame.raw : PULSE_TEXT,
+        frames[0].raw ? frames[0].raw : PULSE_TEXT,
         28,
         height - 44,
         Math.min(width - 56, 300),
@@ -476,7 +488,7 @@ function App() {
 
   const stopAndReset = () => {
     stopCamera()
-    frameRef.current = null
+    frameListRef.current = []
     lastObservedRef.current = { raw: '', at: 0 }
     setScannedAt({})
     setLastFeedback(null)
@@ -484,7 +496,6 @@ function App() {
     setScanStatus('idle')
     setCameraHint('')
   }
-
   const submitManualCode = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     observeCode(manualCode, 'manual')
