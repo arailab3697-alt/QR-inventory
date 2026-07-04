@@ -37,8 +37,8 @@ npm run lint
 `src-uv/main.py` には、平文 JSON と暗号化 JSON を相互変換する CLI があります。
 
 ```bash
-python main.py encrypt ../data/plain.json ../encrypted.json --password cucris
-python main.py decrypt ../encrypted.json ../plain.json --password cucris
+uv run main.py encrypt ..\private\reagents.json ../src/encryptedInventory.ts --ts --password cucris
+uv run main.py decrypt ../encrypted.json ../plain.json --password cucris
 ```
 
 ## データ形式
