@@ -12,9 +12,14 @@ import {
   type InventoryEnvelope,
   type Reagent,
 } from './lib/inventory'
+import { InventoryApi } from './lib/inventoryApi'
+import { hashPassword } from './lib/password'
 import { buildShelfGroups, normalizeShelf, type ShelfGroup } from './lib/shelves'
 import { useSelectedShelfState } from './hooks/useSelectedShelfState'
-import { INFERRED_SHELF_VALUE } from './lib/shelfSelection'
+import {
+  formatShelfSelection,
+  INFERRED_SHELF_VALUE,
+} from './lib/shelfSelection'
 import './App.css'
 import 'antd/dist/antd.css'
 import { Cascader } from 'antd'
@@ -59,6 +64,8 @@ declare global {
 
 const DEMO_PASSWORD = 'cucris'
 const PULSE_TEXT = 'Align a QR code inside the frame'
+const gasEndpoint = import.meta.env.VITE_GAS_ENDPOINT?.trim() || null
+
 
 function App() {
   const [mode, setMode] = useState<Mode>('scan')
@@ -80,6 +87,14 @@ function App() {
   const [showAllShelves, setShowAllShelves] = useState(false)
   const [showUnscannedItems, setShowUnscannedItems] = useState(false);
   const [selectedShelf, setSelectedShelf] = useState<string>('');
+  const [reportToken, setReportToken] = useState<string | null>(null)
+  const [reportState, setReportState] = useState<{
+    status: 'idle' | 'sending' | 'success' | 'error'
+    message: string
+  }>({
+    status: 'idle',
+    message: '',
+  })
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -91,6 +106,10 @@ function App() {
   const scanLoopRef = useRef<number | null>(null)
   const drawLoopRef = useRef<number | null>(null)
   const lastObservedRef = useRef({ raw: '', at: 0 })
+  const inventoryApi = useMemo(
+    () => new InventoryApi(gasEndpoint, reportToken),
+    [gasEndpoint, reportToken],
+  )
 
   const reagentIndex = useMemo(() => {
     if (!inventory) {
@@ -211,6 +230,15 @@ function App() {
       ),
     [selectedShelfState.foreignReagents],
   )
+  const foreignItemReports = useMemo(
+    () =>
+      selectedShelfState.foreignReagents.map((reagent) => ({
+        id: reagent.id,
+        actualShelf: formatShelfSelection(selectedShelfState.selection),
+        expectedShelf: normalizeShelf(reagent.shelf),
+      })),
+    [selectedShelfState.foreignReagents, selectedShelfState.selection],
+  )
   const foreignCodeSetRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
@@ -218,6 +246,9 @@ function App() {
   }, [foreignCodeSet])
 
   const hasSearchTargets = searchTargetIds.length > 0
+  const isReportingForeignItems = reportState.status === 'sending'
+  const canReportForeignItems =
+    gasEndpoint !== null && reportToken !== null && foreignItemReports.length > 0
 
   const stopCamera = () => {
     if (scanLoopRef.current !== null) {
@@ -573,12 +604,17 @@ function App() {
         password,
       )
       const parsed = normalizeInventory(plain)
+      const token = await hashPassword(password)
       setInventory(parsed)
+      setReportToken(token)
+      setReportState({ status: 'idle', message: '' })
       setUnlockState('open')
       setPassword('')
       setCameraHint('Inventory decrypted successfully.')
     } catch {
       setUnlockError('Wrong password or corrupted encrypted data.')
+      setReportToken(null)
+      setReportState({ status: 'idle', message: '' })
       setUnlockState('locked')
     }
   }
@@ -600,6 +636,8 @@ function App() {
     setScanMessage('Session reset.')
     setScanStatus('idle')
     setCameraHint('')
+    setReportToken(null)
+    setReportState({ status: 'idle', message: '' })
   }
   const submitManualCode = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -629,6 +667,29 @@ function App() {
   }
 
   const isWarningResult = Boolean(lastFeedback && !lastFeedback.matched)
+
+  const handleReportForeignItems = async () => {
+    if (!canReportForeignItems || isReportingForeignItems) {
+      return
+    }
+
+    setReportState({ status: 'sending', message: '' })
+
+    try {
+      const result = await inventoryApi.reportForeignItems(foreignItemReports)
+      const count = typeof result.count === 'number' ? result.count : foreignItemReports.length
+      setReportState({
+        status: 'success',
+        message: `${count}件報告しました`,
+      })
+    } catch (error) {
+      setReportState({
+        status: 'error',
+        message:
+          error instanceof Error ? error.message : 'Foreign Itemの報告に失敗しました。',
+      })
+    }
+  }
 
   if (unlockState !== 'open' || !inventory) {
     return (
@@ -1025,6 +1086,29 @@ function App() {
                 emptyLabel="No foreign scanned items found."
               />
             </details>
+          ) : null}
+
+          {gasEndpoint !== null ? (
+            <div className="foreign-report-panel">
+              <button
+                type="button"
+                className="foreign-report-button"
+                onClick={handleReportForeignItems}
+                disabled={isReportingForeignItems || !canReportForeignItems}
+              >
+                {isReportingForeignItems ? '送信中...' : 'Foreign Itemを報告'}
+              </button>
+
+              {reportState.message ? (
+                <p
+                  className={
+                    reportState.status === 'error' ? 'error-text report-message' : 'status-copy report-message'
+                  }
+                >
+                  {reportState.message}
+                </p>
+              ) : null}
+            </div>
           ) : null}
 
           <ShelfTreePanel

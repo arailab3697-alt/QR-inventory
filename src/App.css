@@ -263,6 +263,26 @@ button.ghost {
   background: rgba(5, 9, 14, 0.72);
 }
 
+.foreign-report-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(87, 149, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(5, 9, 14, 0.72);
+}
+
+.foreign-report-button {
+  width: fit-content;
+  background: linear-gradient(90deg, #f0b349, #ff6f61);
+  color: #180a04;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.report-message {
+  line-height: 1.55;
+}
+
 .target-actions {
   display: flex;
   justify-content: flex-end;
@@ -681,6 +701,10 @@ h2 {
 
   .scan-actions button,
   .manual-row button {
+    width: 100%;
+  }
+
+  .foreign-report-button {
     width: 100%;
   }
 
