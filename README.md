@@ -1,22 +1,40 @@
 # QR Inventory
 
-QR コードで試薬の在庫を読み取り、暗号化された JSON データを復号して管理する Web アプリです。
+QR コードで試薬在庫を確認する Web アプリです。暗号化された在庫データをブラウザで復号し、カメラ読み取りと手入力を使って探索と棚卸を行います。
+
+## 機能
+
+- パスワードによる在庫データの復号
+- QR カメラ読み取り
+- 探索対象 ID の登録と強調表示
+- 棚卸進捗の可視化
+- 棚ごとの `Scanned / Unscanned / Foreign` 表示
+- 未登録 QR の表示
+- 手入力による QR ID 確認
 
 ## 構成
 
-- `src/`
-  - React + TypeScript の画面実装
-  - QR 読み取り画面、進捗表示、手入力フォールバック
-  - `src/lib/crypto.ts`: Web Crypto API を使った PBKDF2 + AES-GCM
-  - `src/lib/inventory.ts`: 在庫データの正規化と検索用ユーティリティ
-- `data/`
-  - `plain.json`: 平文の在庫データサンプル
+- `src/App.tsx`
+  - 画面全体の状態管理とレイアウト
+- `src/components/`
+  - `InventoryItemList.tsx`: アイテム一覧の共通描画
+  - `ShelfItemsSection.tsx`: 棚内アイテムのセクション表示
+  - `ShelfTreePanel.tsx`: 棚ツリー表示
+- `src/hooks/`
+  - `useSelectedShelfState.ts`: 選択棚の派生 state 計算
+- `src/lib/`
+  - `code.ts`: QR ID 正規化
+  - `crypto.ts`: PBKDF2 + AES-GCM の復号処理
+  - `inventoryTypes.ts`: 在庫データ型
+  - `inventoryParse.ts`: 在庫 JSON の正規化
+  - `inventoryDedup.ts`: `id` ベースの重複排除
+  - `reagentIndex.ts`: QR ID から試薬を引く index
+  - `shelves.ts`: 棚グループ構築
+  - `shelfSelection.ts`: 棚選択文字列の解析
 - `src/encryptedInventory.ts`
   - アプリ起動時に復号する埋め込み済み暗号化データ
 - `src-uv/`
   - Python の変換ツール
-  - `main.py`: `encrypt` / `decrypt` CLI
-  - `pyproject.toml`: Python 側の依存定義
 
 ## 起動
 
@@ -29,7 +47,6 @@ npm run dev
 
 ```bash
 npm run build
-npm run lint
 ```
 
 ## Python ツール
@@ -43,7 +60,7 @@ uv run main.py decrypt ../encrypted.json ../plain.json --password cucris
 
 ## データ形式
 
-在庫データは次のような形を想定しています。
+平文の在庫データは次の形式を想定しています。
 
 ```json
 {
@@ -57,4 +74,10 @@ uv run main.py decrypt ../encrypted.json ../plain.json --password cucris
 }
 ```
 
-暗号化形式は PBKDF2 で鍵を導出し、AES-GCM で本文を保護しています。
+## 暗号化
+
+- 鍵導出: PBKDF2
+- ハッシュ: SHA-256
+- 暗号化方式: AES-GCM
+
+ブラウザ側では Web Crypto API を使って復号します。

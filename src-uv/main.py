@@ -63,7 +63,7 @@ def normalize_inventory(payload: Any) -> dict[str, Any]:
         reagent_id = str(entry.get("id", "")).strip()
         name = str(entry.get("name", "")).strip()
         shelf = str(entry.get("shelf", "")).strip()
-        if not reagent_id or not name or not shelf:
+        if not reagent_id:
             continue
 
         key = reagent_id.lower()

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import heroImg from './assets/hero.png'
 import encryptedInventory from './encryptedInventory'
+import { ShelfItemsSection } from './components/ShelfItemsSection'
+import { ShelfTreePanel } from './components/ShelfTreePanel'
 import { decryptInventory } from './lib/crypto'
+import { normalizeCode } from './lib/code'
 import {
   buildReagentIndex,
   normalizeInventory,
@@ -9,7 +12,11 @@ import {
   type InventoryEnvelope,
   type Reagent,
 } from './lib/inventory'
+import { buildShelfGroups, normalizeShelf, type ShelfGroup } from './lib/shelves'
+import { useSelectedShelfState } from './hooks/useSelectedShelfState'
 import './App.css'
+import 'antd/dist/antd.css'
+import { Cascader } from 'antd'
 
 type Mode = 'scan' | 'coverage'
 type ScanStatus = 'idle' | 'running' | 'preview-only' | 'blocked' | 'error'
@@ -52,40 +59,6 @@ declare global {
 const DEMO_PASSWORD = 'cucris'
 const PULSE_TEXT = 'Align a QR code inside the frame'
 
-function normalizeCode(value: string) {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase()
-}
-
-function normalizeShelf(value: string) {
-  const shelf = value.trim()
-  return shelf || 'その他'
-}
-
-function splitShelfHierarchy(value: string) {
-  const shelf = normalizeShelf(value)
-  const parts = shelf.split(/\s+/).filter(Boolean)
-
-  if (parts.length <= 1) {
-    return { parent: shelf, child: '' }
-  }
-
-  return {
-    parent: parts[0],
-    child: parts.slice(1).join(' '),
-  }
-}
-
-type PendingShelfLeaf = {
-  label: string
-  reagents: Reagent[]
-}
-
-type PendingShelfGroup = {
-  parent: string
-  directReagents: Reagent[]
-  children: PendingShelfLeaf[]
-}
-
 function App() {
   const [mode, setMode] = useState<Mode>('scan')
   const [password, setPassword] = useState('')
@@ -104,7 +77,8 @@ function App() {
   const [scannedAt, setScannedAt] = useState<Record<string, number>>({})
   const [cameraHint, setCameraHint] = useState('')
   const [showAllShelves, setShowAllShelves] = useState(false)
-  const [showUnscannedItems, setShowUnscannedItems] = useState(false)
+  const [showUnscannedItems, setShowUnscannedItems] = useState(false);
+  const [selectedShelf, setSelectedShelf] = useState<string>('');
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -122,7 +96,7 @@ function App() {
       return new Map<string, Reagent>()
     }
 
-    return buildReagentIndex(inventory)
+    return buildReagentIndex(inventory.reagents)
   }, [inventory])
 
   const searchTargetSet = useMemo(() => new Set(searchTargetIds), [searchTargetIds])
@@ -169,6 +143,16 @@ function App() {
   const coverage = totalCount > 0 ? scannedCount / totalCount : 0
   const coverageLabel = `${Math.round(coverage * 100)}%`
   const allCaptured = totalCount > 0 && scannedCount === totalCount
+  const isSearchMode = mode === 'scan'
+  const isCoverageMode = mode === 'coverage'
+
+  const inventoryShelfGroups = useMemo<ShelfGroup[]>(() => {
+    if (!inventory) {
+      return []
+    }
+
+    return buildShelfGroups(inventory.reagents)
+  }, [inventory])
 
   const pendingReagents = useMemo(() => {
     if (!inventory) {
@@ -180,48 +164,30 @@ function App() {
     )
   }, [inventory, scannedAt])
 
-  const pendingShelfGroups = useMemo<PendingShelfGroup[]>(() => {
-    const parentGroups = new Map<
-      string,
-      {
-        directReagents: Reagent[]
-        childGroups: Map<string, Reagent[]>
-      }
-    >()
-
-    for (const reagent of pendingReagents) {
-      const { parent, child } = splitShelfHierarchy(reagent.shelf)
-      const group = parentGroups.get(parent) ?? {
-        directReagents: [],
-        childGroups: new Map<string, Reagent[]>(),
-      }
-
-      if (child) {
-        const list = group.childGroups.get(child) ?? []
-        list.push(reagent)
-        group.childGroups.set(child, list)
-      } else {
-        group.directReagents.push(reagent)
-      }
-
-      parentGroups.set(parent, group)
-    }
-
-    return Array.from(parentGroups.entries())
-      .map(([parent, group]) => ({
-        parent,
-        directReagents: group.directReagents.sort((left, right) =>
-          left.name.localeCompare(right.name),
-        ),
-        children: Array.from(group.childGroups.entries())
-          .map(([label, reagents]) => ({
-            label,
-            reagents: reagents.sort((left, right) => left.name.localeCompare(right.name)),
-          }))
-          .sort((left, right) => left.label.localeCompare(right.label)),
-      }))
-      .sort((left, right) => left.parent.localeCompare(right.parent))
+  const pendingShelfGroups = useMemo<ShelfGroup[]>(() => {
+    return buildShelfGroups(pendingReagents)
   }, [pendingReagents])
+
+  // Cascader options for shelf selection (parent + child)
+  const cascadeOptions = useMemo(
+    () =>
+      inventoryShelfGroups.map((group) => ({
+        value: group.parent,
+        label: group.parent,
+        children: group.children.map((child) => ({
+          value: child.label,
+          label: child.label,
+        })),
+      })),
+    [inventoryShelfGroups],
+  )
+
+  const selectedShelfState = useSelectedShelfState({
+    selectedShelf,
+    shelfGroups: inventoryShelfGroups,
+    allReagents: inventory?.reagents ?? [],
+    scannedAt,
+  })
 
   const hasSearchTargets = searchTargetIds.length > 0
 
@@ -277,7 +243,7 @@ function App() {
 
     const reagent = reagentIndex.get(normalized)
     const matched = Boolean(reagent)
-    const isSearchTarget = searchTargetSet.has(normalized)
+    const isSearchTarget = isSearchMode && searchTargetSet.has(normalized)
     const frame: ScanFrame = {
       raw: rawValue.trim(),
       matched,
@@ -322,7 +288,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (mode !== 'scan' || unlockState !== 'open') {
+    if (unlockState !== 'open') {
       stopCamera()
       setScanMessage('Camera is stopped.')
       setScanStatus('idle')
@@ -432,7 +398,7 @@ function App() {
   }, [mode, unlockState, scanSeed, searchTargetSet])
 
   useEffect(() => {
-    if (mode !== 'scan' || unlockState !== 'open') {
+    if (unlockState !== 'open') {
       return
     }
 
@@ -691,20 +657,20 @@ function App() {
           <button
             type="button"
             role="tab"
-            aria-selected={mode === 'scan'}
-            className={mode === 'scan' ? 'active' : ''}
+            aria-selected={isSearchMode}
+            className={isSearchMode ? 'active' : ''}
             onClick={() => setMode('scan')}
           >
-            Scan
+            試薬探索
           </button>
           <button
             type="button"
             role="tab"
-            aria-selected={mode === 'coverage'}
-            className={mode === 'coverage' ? 'active' : ''}
+            aria-selected={isCoverageMode}
+            className={isCoverageMode ? 'active' : ''}
             onClick={() => setMode('coverage')}
           >
-            Coverage
+            棚卸
           </button>
         </div>
       </header>
@@ -751,88 +717,93 @@ function App() {
             </button>
           </div>
 
-          <details className="help-details">
-            <summary>どうしてもQRコードが読めない時</summary>
-            <div className="help-details-body">
+          {isCoverageMode ? (
+            <details className="help-details">
+              <summary>どうしてもQRコードが読めない時</summary>
+              <div className="help-details-body">
+                <p className="status-copy">
+                  カメラで読めないときだけ、QR ID を手入力して確認できます。
+                </p>
+                <form className="manual-form" onSubmit={submitManualCode}>
+                  <label className="field-label" htmlFor="manual-code">
+                    QR ID
+                  </label>
+                  <div className="manual-row">
+                    <input
+                      id="manual-code"
+                      value={manualCode}
+                      onChange={(event) => setManualCode(event.target.value)}
+                      placeholder="Paste or type a QR ID"
+                    />
+                    <button type="submit">Check</button>
+                  </div>
+                </form>
+              </div>
+            </details>
+          ) : null}
+
+          {isSearchMode ? (
+            <section className="search-target-panel">
+              <div className="panel-head compact">
+                <div>
+                  <p className="eyebrow">Search targets</p>
+                  <h2>探索中 IDs</h2>
+                </div>
+                <p className="inventory-count">{searchTargetIds.length} ids</p>
+              </div>
+
               <p className="status-copy">
-                カメラで読めないときだけ、QR ID を手入力して確認できます。
+                ID を登録しておくと、見つかった領域を赤で強調します。
               </p>
-              <form className="manual-form" onSubmit={submitManualCode}>
-                <label className="field-label" htmlFor="manual-code">
-                  QR ID
+
+              <form className="manual-form" onSubmit={submitSearchTarget}>
+                <label className="field-label" htmlFor="search-target-code">
+                  Add target ID
                 </label>
                 <div className="manual-row">
                   <input
-                    id="manual-code"
-                    value={manualCode}
-                    onChange={(event) => setManualCode(event.target.value)}
-                    placeholder="Paste or type a QR ID"
+                    id="search-target-code"
+                    value={searchTargetCode}
+                    onChange={(event) => setSearchTargetCode(event.target.value)}
+                    placeholder="Enter an ID to search for"
                   />
-                  <button type="submit">Check</button>
+                  <button type="submit">Add</button>
                 </div>
               </form>
-            </div>
-          </details>
 
-          <section className="search-target-panel">
-            <div className="panel-head compact">
-              <div>
-                <p className="eyebrow">Search targets</p>
-                <h2>探索中 IDs</h2>
+              <div className="target-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={clearSearchTargets}
+                  disabled={!hasSearchTargets}
+                >
+                  Clear all
+                </button>
               </div>
-              <p className="inventory-count">{searchTargetIds.length} ids</p>
-            </div>
 
-            <p className="status-copy">
-              ID を登録しておくと、見つかった領域を赤で強調します。
-            </p>
-
-            <form className="manual-form" onSubmit={submitSearchTarget}>
-              <label className="field-label" htmlFor="search-target-code">
-                Add target ID
-              </label>
-              <div className="manual-row">
-                <input
-                  id="search-target-code"
-                  value={searchTargetCode}
-                  onChange={(event) => setSearchTargetCode(event.target.value)}
-                  placeholder="Enter an ID to search for"
-                />
-                <button type="submit">Add</button>
-              </div>
-            </form>
-
-            <div className="target-actions">
-              <button
-                type="button"
-                className="ghost"
-                onClick={clearSearchTargets}
-                disabled={!hasSearchTargets}
-              >
-                Clear all
-              </button>
-            </div>
-
-            {hasSearchTargets ? (
-              <div className="target-chip-list">
-                {searchTargetIds.map((target) => (
-                  <button
-                    key={target}
-                    type="button"
-                    className="target-chip"
-                    onClick={() => removeSearchTarget(target)}
-                    title="Click to remove"
-                  >
-                    {target}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="status-copy">No exploration targets registered yet.</p>
-            )}
-          </section>
+              {hasSearchTargets ? (
+                <div className="target-chip-list">
+                  {searchTargetIds.map((target) => (
+                    <button
+                      key={target}
+                      type="button"
+                      className="target-chip"
+                      onClick={() => removeSearchTarget(target)}
+                      title="Click to remove"
+                    >
+                      {target}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="status-copy">No exploration targets registered yet.</p>
+              )}
+            </section>
+          ) : null}
         </article>
 
+        {isCoverageMode ? (
         <aside className="summary-pane">
           <section className="panel summary-card">
             <div className="panel-head compact">
@@ -897,6 +868,25 @@ function App() {
                     <dd>{lastFeedback.reagent ? normalizeShelf(lastFeedback.reagent.shelf) : '---'}</dd>
                   </div>
                 </dl>
+                {/* Unregistered items: scanned but not in any shelf */}
+                <div className="targets-tile" style={{ marginTop: '0.5rem' }}>
+                  <h3 className="eyebrow">Unregistered items</h3>
+                  <ul className="inventory-grid">
+                    {(() => {
+                      const allReagents = inventory.reagents;
+                      const scannedIds = Object.keys(scannedAt).map(normalizeCode);
+                      const unregisteredIds = scannedIds.filter(
+                        (id) => !allReagents.some((reagent) => normalizeCode(reagent.id) === id),
+                      );
+                      return unregisteredIds.map(id => (
+                        <li key={id} className="inventory-item">
+                          <p className="item-name">---</p>
+                          <p className="item-meta">{id}</p>
+                        </li>
+                      ));
+                    })()}
+                  </ul>
+                </div>
               </div>
             ) : (
               <p className="status-copy">No scans yet.</p>
@@ -944,86 +934,53 @@ function App() {
             ) : null}
           </section>
         </aside>
-      </section>
-
-      <section className="panel inventory-pane">
-        <div className="panel-head compact">
-          <div>
-            <p className="eyebrow">Inventory</p>
-            <h2>Unscanned items</h2>
-          </div>
-          <div className="inventory-head-actions">
-            <p className="inventory-count">{pendingReagents.length} items</p>
-            <button
-              type="button"
-              className="ghost shelf-toggle"
-              onClick={() => setShowUnscannedItems((value) => !value)}
-            >
-              {showUnscannedItems ? '折りたたむ' : '展開'}
-            </button>
-          </div>
-        </div>
-
-        {showUnscannedItems ? (
-          <div className="inventory-shelves">
-            {pendingShelfGroups.map((group) => {
-              const childCount = group.children.reduce(
-                (total, child) => total + child.reagents.length,
-                0,
-              )
-              const totalCount = group.directReagents.length + childCount
-
-              return (
-              <details key={group.parent} className="inventory-shelf inventory-shelf-parent">
-                <summary>
-                  <div>
-                    <strong>{group.parent}</strong>
-                    <span>{totalCount} items</span>
-                  </div>
-                </summary>
-                <div className="inventory-shelf-children">
-                  {group.directReagents.length ? (
-                    <div className="inventory-shelf-direct">
-                      <div className="inventory-shelf-direct-head">
-                        <strong>親直下</strong>
-                        <span>{group.directReagents.length} items</span>
-                      </div>
-                      <div className="inventory-grid">
-                        {group.directReagents.map((reagent) => (
-                          <article key={reagent.id} className="inventory-item">
-                            <p className="item-name">{reagent.name}</p>
-                            <p className="item-meta">{reagent.id}</p>
-                          </article>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {group.children.map((child) => (
-                    <details key={`${group.parent} ${child.label}`} className="inventory-shelf inventory-shelf-child">
-                      <summary>
-                        <div>
-                          <strong>{child.label}</strong>
-                          <span>{child.reagents.length} items</span>
-                        </div>
-                      </summary>
-                      <div className="inventory-grid">
-                        {child.reagents.map((reagent) => (
-                          <article key={reagent.id} className="inventory-item">
-                            <p className="item-name">{reagent.name}</p>
-                            <p className="item-meta">{reagent.id}</p>
-                          </article>
-                        ))}
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              </details>
-              )
-            })}
-          </div>
         ) : null}
       </section>
+
+      {isCoverageMode ? (
+        <section className="panel inventory-pane">
+          <Cascader
+            options={cascadeOptions}
+            placeholder="棚を選択"
+            value={selectedShelf ? selectedShelf.split('/') : []}
+            onChange={(vals) => setSelectedShelf(vals.join('/'))}
+            style={{ width: 200, marginBottom: '1rem' }}
+          />
+
+          {selectedShelfState.selection ? (
+            <details className="inventory-shelf-targets" open style={{ marginBottom: '1rem' }}>
+              <summary>{selectedShelfState.label}</summary>
+              <ShelfItemsSection
+                title="Scanned items"
+                count={selectedShelfState.counts.scanned}
+                total={selectedShelfState.counts.total}
+                items={selectedShelfState.scannedReagents}
+                emptyLabel="No scanned items on this shelf yet."
+              />
+              <ShelfItemsSection
+                title="Unscanned items"
+                count={selectedShelfState.counts.unscanned}
+                total={selectedShelfState.counts.total}
+                items={selectedShelfState.unscannedReagents}
+                emptyLabel="This shelf is fully scanned."
+              />
+              <ShelfItemsSection
+                title="Foreign items"
+                count={selectedShelfState.counts.foreign}
+                total={inventory.reagents.length}
+                items={selectedShelfState.foreignReagents}
+                emptyLabel="No foreign scanned items found."
+              />
+            </details>
+          ) : null}
+
+          <ShelfTreePanel
+            groups={pendingShelfGroups}
+            expanded={showUnscannedItems}
+            onToggle={() => setShowUnscannedItems((value) => !value)}
+          />
+        </section>
+      ) : null}
     </main>
   )
 }
