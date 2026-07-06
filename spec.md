@@ -1,128 +1,54 @@
 # QR Inventory
 
-試薬の蓋に貼り付けたQRコードを利用し、**試薬検索**と**棚卸**を高速化するWebアプリケーションです。
+QR コードで試薬在庫を確認する Web アプリケーションです。暗号化された在庫データをブラウザで復号し、カメラ読み取りと手入力を組み合わせて試薬の探索と棚卸を行います。
 
 ## 目的
 
-研究室で利用している試薬管理システム **Cucris** のQRコードを読み取り、
+- 試薬を素早く検索する
+- 棚卸の進捗を可視化する
+- 読み取った QR を一度だけ記録し、重複検出を抑える
 
-* 試薬を素早く探す
-* 棚卸を効率化する
+## 画面構成
 
-ことを目的とします。
+アプリは起動時にロック画面を表示します。
 
----
+- パスワードを入力して暗号化データを復号する
+- 復号成功後に scan / coverage の 2 モードを利用する
 
-# アプリケーション構成
+## モード
 
-起動時に暗号化された試薬データ(JSON)を読み込みます。
+### 1. Scan
 
-最初にパスワード入力画面を表示します。
+探索用モードです。
 
-入力されたパスワードを利用してJSONを復号します。
+- 複数の探索対象 QR ID を登録できる
+- カメラで検出した QR を overlay canvas に描画する
+- 探索対象は赤、通常の登録済み QR は緑、未登録 QR は警告色で表示する
+- 検出中の QR の ID と試薬名を表示する
 
-復号に失敗した場合はエラーを表示します。
+### 2. Coverage
 
-成功した場合のみアプリを利用できます。
+棚卸用モードです。
 
----
+- 全体の scan 進捗を表示する
+- 棚ごとの進捗を表示する
+- 選択した棚に対して以下を表示する
+  - Scanned items
+  - Unscanned items
+  - Foreign items
+- 未登録で読み取った QR を `Unregistered items` として別枠で表示する
+- coverage が 100% になったら完了バナーを表示する
 
-# モード
+## QR 検出
 
-## 1. 試薬検索モード
+- 基本は `BarcodeDetector` を利用する
+- カメラ映像は `<video>` で表示する
+- QR の矩形とラベルは video 上に重ねた canvas へ描画する
+- 同一 QR の連続検出は短時間にまとめ、読み取り済み集合として保持する
 
-ユーザーは複数の試薬IDを入力できます。
+## 在庫データ
 
-カメラでQRコードを検出し、
-
-* 通常のQRは緑色
-* 指定された試薬IDのQRは赤色
-
-でOverlayに表示してください。
-
-画面には
-
-* 試薬名
-* 試薬ID
-
-も表示してください。
-
----
-
-## 2. 棚卸モード
-
-棚ごとに管理対象試薬一覧があります。
-
-QRコードを読み取りながら
-
-```
-Coverage = 検出済み試薬数 / 登録試薬数
-```
-
-をリアルタイム表示してください。
-
-さらに
-
-* 未検出試薬一覧
-* 本来存在しない試薬一覧
-
-も表示してください。
-
-Coverageが100%になったら
-
-```
-棚卸完了
-```
-
-を表示してください。
-
----
-
-# UI
-
-プレビューにはHTMLの`<video>`を利用してください。
-
-QR領域の描画はvideoの上に重ねたOverlay Canvasへ行ってください。
-
-表示内容
-
-* QRポリゴン
-* QR ID
-* 検索対象なら赤色
-* 通常は緑色
-
----
-
-# QR検出
-
-QR検出には **Shape Detection API (BarcodeDetector)** を利用してください。
-
-`BarcodeDetector` が利用できないブラウザでは
-
-ZXingへフォールバックしてください。
-
----
-
-# データ
-
-JSONはAESで暗号化します。
-
-ブラウザ側では
-
-* Web Crypto API
-* AES-GCM
-
-を利用して復号してください。
-
-パスワードから鍵を生成する際は
-
-```
-PBKDF2
-```
-
-を利用してください。
-
-JSONの平文は以下のような形式です。
+平文の在庫データは次の形式を想定する。
 
 ```json
 {
@@ -136,45 +62,48 @@ JSONの平文は以下のような形式です。
 }
 ```
 
----
+### ルール
 
-# Pythonツール
+- `id` は必須
+- `name` と `shelf` は文字列として取り込む
+- 同じ `id` の重複は 1 件にまとめる
+- `id` の比較は大文字小文字を無視する
 
-Pythonで
+## 暗号化
 
-```
-plain.json
-```
+在庫データはブラウザ側で Web Crypto API により復号する。
 
-↓
+- 鍵導出: PBKDF2
+- ハッシュ: SHA-256
+- 暗号化方式: AES-GCM
 
-```
-encrypted.json
-```
+## 実装メモ
 
-へ変換する暗号化ツールを作成してください。
+- `src/lib/inventoryTypes.ts`: 在庫データ型
+- `src/lib/inventoryParse.ts`: 平文 JSON の正規化
+- `src/lib/inventoryDedup.ts`: `id` ベースの重複排除
+- `src/lib/reagentIndex.ts`: QR ID から試薬を引く index
+- `src/lib/shelves.ts`: 棚ツリーの構築
+- `src/hooks/useSelectedShelfState.ts`: 選択棚の scanned / unscanned / foreign 集計
 
-条件
+## Python ツール
 
-* Python 3.12以上
-* uvでプロジェクト管理
-* cryptographyライブラリ利用
-* AES-GCM
-* PBKDF2-HMAC-SHA256
+`src-uv/main.py` で平文 JSON と暗号化 JSON を相互変換する。
 
----
+条件:
 
-# 技術スタック
+- Python 3.12 以上
+- `uv` で管理
+- `cryptography` を利用
+- AES-GCM と PBKDF2-HMAC-SHA256 を使用
 
-* HTML
-* CSS
-* JavaScript (ES Modules)
-* Shape Detection API
-* Web Crypto API
-* Python
-* uv
-* cryptography
+## 技術スタック
 
----
-
-QRコードは各フレームで独立して扱うのではなく、読み取り済みQRの集合（Union）を保持すること。同じQRを複数回検出しても一度だけ登録し、新しいQRが検出された場合のみ集合を更新する。
+- React
+- TypeScript
+- Vite
+- Web Crypto API
+- Shape Detection API
+- Python
+- uv
+- cryptography

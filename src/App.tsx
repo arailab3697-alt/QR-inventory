@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import heroImg from './assets/hero.png'
 import encryptedInventory from './encryptedInventory'
+import { ShelfItemsSection } from './components/ShelfItemsSection'
+import { ShelfTreePanel } from './components/ShelfTreePanel'
 import { decryptInventory } from './lib/crypto'
+import { normalizeCode } from './lib/code'
 import {
   buildReagentIndex,
   normalizeInventory,
@@ -9,7 +12,17 @@ import {
   type InventoryEnvelope,
   type Reagent,
 } from './lib/inventory'
+import { InventoryApi } from './lib/inventoryApi'
+import { hashPassword } from './lib/password'
+import { buildShelfGroups, normalizeShelf, type ShelfGroup } from './lib/shelves'
+import { useSelectedShelfState } from './hooks/useSelectedShelfState'
+import {
+  formatShelfSelection,
+  INFERRED_SHELF_VALUE,
+} from './lib/shelfSelection'
 import './App.css'
+import 'antd/dist/antd.css'
+import { Cascader } from 'antd'
 
 type Mode = 'scan' | 'coverage'
 type ScanStatus = 'idle' | 'running' | 'preview-only' | 'blocked' | 'error'
@@ -51,10 +64,8 @@ declare global {
 
 const DEMO_PASSWORD = 'cucris'
 const PULSE_TEXT = 'Align a QR code inside the frame'
+const gasEndpoint = import.meta.env.VITE_GAS_ENDPOINT?.trim() || null
 
-function normalizeCode(value: string) {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase()
-}
 
 function App() {
   const [mode, setMode] = useState<Mode>('scan')
@@ -65,12 +76,25 @@ function App() {
   const [unlockError, setUnlockError] = useState('')
   const [inventory, setInventory] = useState<Inventory | null>(null)
   const [manualCode, setManualCode] = useState('')
+  const [searchTargetCode, setSearchTargetCode] = useState('')
+  const [searchTargetIds, setSearchTargetIds] = useState<string[]>([])
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle')
   const [scanMessage, setScanMessage] = useState('Camera is idle.')
   const [lastFeedback, setLastFeedback] = useState<ScanFeedback | null>(null)
   const [scanSeed, setScanSeed] = useState(0)
   const [scannedAt, setScannedAt] = useState<Record<string, number>>({})
   const [cameraHint, setCameraHint] = useState('')
+  const [showAllShelves, setShowAllShelves] = useState(false)
+  const [showUnscannedItems, setShowUnscannedItems] = useState(false);
+  const [selectedShelf, setSelectedShelf] = useState<string>('');
+  const [reportToken, setReportToken] = useState<string | null>(null)
+  const [reportState, setReportState] = useState<{
+    status: 'idle' | 'sending' | 'success' | 'error'
+    message: string
+  }>({
+    status: 'idle',
+    message: '',
+  })
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -82,14 +106,20 @@ function App() {
   const scanLoopRef = useRef<number | null>(null)
   const drawLoopRef = useRef<number | null>(null)
   const lastObservedRef = useRef({ raw: '', at: 0 })
+  const inventoryApi = useMemo(
+    () => new InventoryApi(gasEndpoint, reportToken),
+    [gasEndpoint, reportToken],
+  )
 
   const reagentIndex = useMemo(() => {
     if (!inventory) {
       return new Map<string, Reagent>()
     }
 
-    return buildReagentIndex(inventory)
+    return buildReagentIndex(inventory.reagents)
   }, [inventory])
+
+  const searchTargetSet = useMemo(() => new Set(searchTargetIds), [searchTargetIds])
 
   const shelfGroups = useMemo(() => {
     if (!inventory) {
@@ -98,17 +128,34 @@ function App() {
 
     const groups = new Map<string, Reagent[]>()
     for (const reagent of inventory.reagents) {
-      const list = groups.get(reagent.shelf) ?? []
+      const shelf = normalizeShelf(reagent.shelf)
+      const list = groups.get(shelf) ?? []
       list.push(reagent)
-      groups.set(reagent.shelf, list)
+      groups.set(shelf, list)
     }
 
-    return Array.from(groups.entries()).map(([shelf, reagents]) => ({
-      shelf,
-      reagents,
-      scanned: reagents.filter((entry) => scannedAt[normalizeCode(entry.id)]).length,
-    }))
+    return Array.from(groups.entries())
+      .map(([shelf, reagents]) => ({
+        shelf,
+        reagents,
+        scanned: reagents.filter((entry) => scannedAt[normalizeCode(entry.id)]).length,
+      }))
+      .sort((left, right) => {
+        if (right.scanned !== left.scanned) {
+          return right.scanned - left.scanned
+        }
+
+        return left.shelf.localeCompare(right.shelf)
+      })
   }, [inventory, scannedAt])
+
+  const visibleShelfGroups = useMemo(() => {
+    if (showAllShelves) {
+      return shelfGroups
+    }
+
+    return shelfGroups.slice(0, 3)
+  }, [shelfGroups, showAllShelves])
 
   const totalCount = inventory?.reagents.length ?? 0
   const scannedCount = useMemo(() => Object.keys(scannedAt).length, [scannedAt])
@@ -116,6 +163,16 @@ function App() {
   const coverage = totalCount > 0 ? scannedCount / totalCount : 0
   const coverageLabel = `${Math.round(coverage * 100)}%`
   const allCaptured = totalCount > 0 && scannedCount === totalCount
+  const isSearchMode = mode === 'scan'
+  const isCoverageMode = mode === 'coverage'
+
+  const inventoryShelfGroups = useMemo<ShelfGroup[]>(() => {
+    if (!inventory) {
+      return []
+    }
+
+    return buildShelfGroups(inventory.reagents)
+  }, [inventory])
 
   const pendingReagents = useMemo(() => {
     if (!inventory) {
@@ -126,6 +183,72 @@ function App() {
       (entry) => !scannedAt[normalizeCode(entry.id)],
     )
   }, [inventory, scannedAt])
+
+  const pendingShelfGroups = useMemo<ShelfGroup[]>(() => {
+    return buildShelfGroups(pendingReagents)
+  }, [pendingReagents])
+
+  // Cascader options for shelf selection (parent + child)
+  const cascadeOptions = useMemo(
+    () =>
+      [
+        {
+          value: INFERRED_SHELF_VALUE,
+          label: '推論',
+        },
+        ...inventoryShelfGroups.map((group) => ({
+          value: group.parent,
+          label: group.parent,
+          children: group.children.map((child) => ({
+            value: child.label,
+            label: child.label,
+          })),
+        })),
+      ],
+    [inventoryShelfGroups],
+  )
+
+  const selectedShelfState = useSelectedShelfState({
+    selectedShelf,
+    shelfGroups: inventoryShelfGroups,
+    allReagents: inventory?.reagents ?? [],
+    scannedAt,
+  })
+  const isInferenceSelected = selectedShelf === INFERRED_SHELF_VALUE
+  const selectedShelfPath = selectedShelfState.selection
+    ? selectedShelfState.label
+    : isInferenceSelected
+      ? selectedShelfState.inferenceLabel
+        ? `推論: ${selectedShelfState.inferenceLabel}`
+        : '推論できる棚がありません'
+      : ''
+
+  const foreignCodeSet = useMemo(
+    () =>
+      new Set(
+        selectedShelfState.foreignReagents.map((reagent) => normalizeCode(reagent.id)),
+      ),
+    [selectedShelfState.foreignReagents],
+  )
+  const foreignItemReports = useMemo(
+    () =>
+      selectedShelfState.foreignReagents.map((reagent) => ({
+        id: reagent.id,
+        actualShelf: formatShelfSelection(selectedShelfState.selection),
+        expectedShelf: normalizeShelf(reagent.shelf),
+      })),
+    [selectedShelfState.foreignReagents, selectedShelfState.selection],
+  )
+  const foreignCodeSetRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    foreignCodeSetRef.current = foreignCodeSet
+  }, [foreignCodeSet])
+
+  const hasSearchTargets = searchTargetIds.length > 0
+  const isReportingForeignItems = reportState.status === 'sending'
+  const canReportForeignItems =
+    gasEndpoint !== null && reportToken !== null && foreignItemReports.length > 0
 
   const stopCamera = () => {
     if (scanLoopRef.current !== null) {
@@ -179,6 +302,7 @@ function App() {
 
     const reagent = reagentIndex.get(normalized)
     const matched = Boolean(reagent)
+    const isSearchTarget = isSearchMode && searchTargetSet.has(normalized)
     const frame: ScanFrame = {
       raw: rawValue.trim(),
       matched,
@@ -189,7 +313,7 @@ function App() {
     }
 
     frameListRef.current = [
-      ...frameListRef.current.filter((f) => now - (f.at ?? 0) < 1500),
+      ...frameListRef.current.filter((f) => now - (f.at ?? 0) < 300),
       frame,
     ]
 
@@ -201,9 +325,11 @@ function App() {
       at: now,
     })
     setScanMessage(
-      matched
-        ? `${reagent?.name ?? 'Unknown'} matched.`
-        : 'This QR code is not registered.',
+      isSearchTarget
+        ? `${reagent?.name ?? 'Target QR'} found.`
+        : matched
+          ? `${reagent?.name ?? 'Unknown'} matched.`
+          : 'This QR code is not registered, but it is allowed as a warning.',
     )
 
     if (matched && reagent) {
@@ -221,7 +347,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (mode !== 'scan' || unlockState !== 'open') {
+    if (unlockState !== 'open') {
       stopCamera()
       setScanMessage('Camera is stopped.')
       setScanStatus('idle')
@@ -328,10 +454,10 @@ function App() {
     }
     // observeCode is stable within each render pass and only used inside the async loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, unlockState, scanSeed])
+  }, [mode, unlockState, scanSeed, searchTargetSet])
 
   useEffect(() => {
-    if (mode !== 'scan' || unlockState !== 'open') {
+    if (unlockState !== 'open') {
       return
     }
 
@@ -392,11 +518,21 @@ function App() {
       context.strokeRect(12, 12, width - 24, height - 24)
 
       for (const frame of frames) {
-        const accent = frame.matched ? '#47e6b1' : '#f0b349'
+        const normalizedFrame = normalizeCode(frame.raw)
+        const isForeignItem =
+          isCoverageMode && foreignCodeSetRef.current.has(normalizedFrame)
+        const isSearchTarget = isSearchMode && searchTargetSet.has(normalizedFrame)
+        const accent = isForeignItem || isSearchTarget
+          ? '#ff5d5d'
+          : frame.matched
+            ? '#47e6b1'
+            : '#f0b349'
         context.strokeStyle = accent
-        context.fillStyle = frame.matched
-          ? 'rgba(71, 230, 177, 0.14)'
-          : 'rgba(240, 179, 73, 0.12)'
+        context.fillStyle = isForeignItem || isSearchTarget
+          ? 'rgba(255, 93, 93, 0.18)'
+          : frame.matched
+            ? 'rgba(71, 230, 177, 0.14)'
+            : 'rgba(240, 179, 73, 0.12)'
         context.lineWidth = 3
 
         if (frame.cornerPoints?.length === 4) {
@@ -468,12 +604,17 @@ function App() {
         password,
       )
       const parsed = normalizeInventory(plain)
+      const token = await hashPassword(password)
       setInventory(parsed)
+      setReportToken(token)
+      setReportState({ status: 'idle', message: '' })
       setUnlockState('open')
       setPassword('')
       setCameraHint('Inventory decrypted successfully.')
     } catch {
       setUnlockError('Wrong password or corrupted encrypted data.')
+      setReportToken(null)
+      setReportState({ status: 'idle', message: '' })
       setUnlockState('locked')
     }
   }
@@ -495,11 +636,59 @@ function App() {
     setScanMessage('Session reset.')
     setScanStatus('idle')
     setCameraHint('')
+    setReportToken(null)
+    setReportState({ status: 'idle', message: '' })
   }
   const submitManualCode = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     observeCode(manualCode, 'manual')
     setManualCode('')
+  }
+
+  const submitSearchTarget = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const normalized = normalizeCode(searchTargetCode)
+    if (!normalized) {
+      return
+    }
+
+    setSearchTargetIds((current) =>
+      current.includes(normalized) ? current : [...current, normalized],
+    )
+    setSearchTargetCode('')
+  }
+
+  const removeSearchTarget = (target: string) => {
+    setSearchTargetIds((current) => current.filter((entry) => entry !== target))
+  }
+
+  const clearSearchTargets = () => {
+    setSearchTargetIds([])
+  }
+
+  const isWarningResult = Boolean(lastFeedback && !lastFeedback.matched)
+
+  const handleReportForeignItems = async () => {
+    if (!canReportForeignItems || isReportingForeignItems) {
+      return
+    }
+
+    setReportState({ status: 'sending', message: '' })
+
+    try {
+      const result = await inventoryApi.reportForeignItems(foreignItemReports)
+      const count = typeof result.count === 'number' ? result.count : foreignItemReports.length
+      setReportState({
+        status: 'success',
+        message: `${count}件報告しました`,
+      })
+    } catch (error) {
+      setReportState({
+        status: 'error',
+        message:
+          error instanceof Error ? error.message : 'Foreign Itemの報告に失敗しました。',
+      })
+    }
   }
 
   if (unlockState !== 'open' || !inventory) {
@@ -559,20 +748,20 @@ function App() {
           <button
             type="button"
             role="tab"
-            aria-selected={mode === 'scan'}
-            className={mode === 'scan' ? 'active' : ''}
+            aria-selected={isSearchMode}
+            className={isSearchMode ? 'active' : ''}
             onClick={() => setMode('scan')}
           >
-            Scan
+            試薬探索
           </button>
           <button
             type="button"
             role="tab"
-            aria-selected={mode === 'coverage'}
-            className={mode === 'coverage' ? 'active' : ''}
+            aria-selected={isCoverageMode}
+            className={isCoverageMode ? 'active' : ''}
             onClick={() => setMode('coverage')}
           >
-            Coverage
+            棚卸
           </button>
         </div>
       </header>
@@ -599,8 +788,10 @@ function App() {
               autoPlay
             />
             <canvas ref={canvasRef} className="preview-overlay" />
-            <div className="preview-copy">
-              <p>{scanMessage}</p>
+          <div className="preview-copy">
+              <p className={isWarningResult ? 'warning-underline' : ''}>
+                {scanMessage}
+              </p>
               {cameraHint ? <span>{cameraHint}</span> : null}
             </div>
           </div>
@@ -617,22 +808,93 @@ function App() {
             </button>
           </div>
 
-          <form className="manual-form" onSubmit={submitManualCode}>
-            <label className="field-label" htmlFor="manual-code">
-              QR ID
-            </label>
-            <div className="manual-row">
-              <input
-                id="manual-code"
-                value={manualCode}
-                onChange={(event) => setManualCode(event.target.value)}
-                placeholder="Enter a scanned ID"
-              />
-              <button type="submit">Check</button>
-            </div>
-          </form>
+          {isCoverageMode ? (
+            <details className="help-details">
+              <summary>どうしてもQRコードが読めない時</summary>
+              <div className="help-details-body">
+                <p className="status-copy">
+                  カメラで読めないときだけ、QR ID を手入力して確認できます。
+                </p>
+                <form className="manual-form" onSubmit={submitManualCode}>
+                  <label className="field-label" htmlFor="manual-code">
+                    QR ID
+                  </label>
+                  <div className="manual-row">
+                    <input
+                      id="manual-code"
+                      value={manualCode}
+                      onChange={(event) => setManualCode(event.target.value)}
+                      placeholder="Paste or type a QR ID"
+                    />
+                    <button type="submit">Check</button>
+                  </div>
+                </form>
+              </div>
+            </details>
+          ) : null}
+
+          {isSearchMode ? (
+            <section className="search-target-panel">
+              <div className="panel-head compact">
+                <div>
+                  <p className="eyebrow">Search targets</p>
+                  <h2>探索中 IDs</h2>
+                </div>
+                <p className="inventory-count">{searchTargetIds.length} ids</p>
+              </div>
+
+              <p className="status-copy">
+                ID を登録しておくと、見つかった領域を赤で強調します。
+              </p>
+
+              <form className="manual-form" onSubmit={submitSearchTarget}>
+                <label className="field-label" htmlFor="search-target-code">
+                  Add target ID
+                </label>
+                <div className="manual-row">
+                  <input
+                    id="search-target-code"
+                    value={searchTargetCode}
+                    onChange={(event) => setSearchTargetCode(event.target.value)}
+                    placeholder="Enter an ID to search for"
+                  />
+                  <button type="submit">Add</button>
+                </div>
+              </form>
+
+              <div className="target-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={clearSearchTargets}
+                  disabled={!hasSearchTargets}
+                >
+                  Clear all
+                </button>
+              </div>
+
+              {hasSearchTargets ? (
+                <div className="target-chip-list">
+                  {searchTargetIds.map((target) => (
+                    <button
+                      key={target}
+                      type="button"
+                      className="target-chip"
+                      onClick={() => removeSearchTarget(target)}
+                      title="Click to remove"
+                    >
+                      {target}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="status-copy">No exploration targets registered yet.</p>
+              )}
+            </section>
+          ) : null}
         </article>
 
+        {isCoverageMode ? (
         <aside className="summary-pane">
           <section className="panel summary-card">
             <div className="panel-head compact">
@@ -677,24 +939,45 @@ function App() {
             </div>
 
             {lastFeedback ? (
-              <div className={`focus-card ${lastFeedback.matched ? 'ok' : 'warn'}`}>
+              <div className="focus-card">
                 <p className="focus-title">
                   {lastFeedback.matched ? lastFeedback.reagent?.name : 'Unregistered QR'}
                 </p>
                 <dl>
                   <div>
                     <dt>QR ID</dt>
-                    <dd>{lastFeedback.raw}</dd>
+                    <dd className={isWarningResult ? 'warning-underline' : ''}>
+                      {lastFeedback.raw}
+                    </dd>
                   </div>
                   <div>
                     <dt>Status</dt>
-                    <dd>{lastFeedback.matched ? 'valid' : 'invalid'}</dd>
+                    <dd>{lastFeedback.matched ? 'valid' : 'warning'}</dd>
                   </div>
                   <div>
                     <dt>Shelf</dt>
-                    <dd>{lastFeedback.reagent?.shelf ?? '---'}</dd>
+                    <dd>{lastFeedback.reagent ? normalizeShelf(lastFeedback.reagent.shelf) : '---'}</dd>
                   </div>
                 </dl>
+                {/* Unregistered items: scanned but not in any shelf */}
+                <div className="targets-tile" style={{ marginTop: '0.5rem' }}>
+                  <h3 className="eyebrow">Unregistered items</h3>
+                  <ul className="inventory-grid">
+                    {(() => {
+                      const allReagents = inventory.reagents;
+                      const scannedIds = Object.keys(scannedAt).map(normalizeCode);
+                      const unregisteredIds = scannedIds.filter(
+                        (id) => !allReagents.some((reagent) => normalizeCode(reagent.id) === id),
+                      );
+                      return unregisteredIds.map(id => (
+                        <li key={id} className="inventory-item">
+                          <p className="item-name">---</p>
+                          <p className="item-meta">{id}</p>
+                        </li>
+                      ));
+                    })()}
+                  </ul>
+                </div>
               </div>
             ) : (
               <p className="status-copy">No scans yet.</p>
@@ -707,10 +990,17 @@ function App() {
                 <p className="eyebrow">Shelves</p>
                 <h2>Per-shelf progress</h2>
               </div>
+              <button
+                type="button"
+                className="ghost shelf-toggle"
+                onClick={() => setShowAllShelves((value) => !value)}
+              >
+                {showAllShelves ? '簡易表示' : '詳細'}
+              </button>
             </div>
 
             <div className="shelf-list">
-              {shelfGroups.map((group) => (
+              {visibleShelfGroups.map((group) => (
                 <div key={group.shelf} className="shelf-row">
                   <div>
                     <strong>{group.shelf}</strong>
@@ -728,29 +1018,106 @@ function App() {
                 </div>
               ))}
             </div>
+            {!showAllShelves && shelfGroups.length > visibleShelfGroups.length ? (
+              <p className="status-copy shelf-note">
+                Showing top {visibleShelfGroups.length} shelves by scanned count.
+              </p>
+            ) : null}
           </section>
         </aside>
+        ) : null}
       </section>
 
-      <section className="panel inventory-pane">
-        <div className="panel-head compact">
-          <div>
-            <p className="eyebrow">Inventory</p>
-            <h2>Unscanned items</h2>
-          </div>
-          <p className="inventory-count">{pendingReagents.length} items</p>
-        </div>
+      {isCoverageMode ? (
+        <section className="panel inventory-pane">
+          <Cascader
+            options={cascadeOptions}
+            placeholder="棚を選択"
+            value={
+              selectedShelf === INFERRED_SHELF_VALUE
+                ? [INFERRED_SHELF_VALUE]
+                : selectedShelf
+                  ? selectedShelf.split('/')
+                  : []
+            }
+            onChange={(vals) => {
+              if (vals[0] === INFERRED_SHELF_VALUE) {
+                setSelectedShelf(INFERRED_SHELF_VALUE)
+                return
+              }
 
-        <div className="inventory-grid">
-          {pendingReagents.map((reagent) => (
-            <article key={reagent.id} className="inventory-item">
-              <p className="item-name">{reagent.name}</p>
-              <p className="item-meta">{reagent.id}</p>
-              <p className="item-meta">{reagent.shelf}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+              setSelectedShelf(vals.join('/'))
+            }}
+            style={{ width: 200, marginBottom: '1rem' }}
+          />
+
+          {selectedShelfState.selection || isInferenceSelected ? (
+            <p className="status-copy" style={{ marginBottom: '0.75rem' }}>
+              {isInferenceSelected
+                ? selectedShelfState.inferenceLabel
+                  ? `推論結果: ${selectedShelfState.inferenceLabel}`
+                  : '推論結果: まだ棚を推論できません'
+                : `選択中棚: ${selectedShelfState.label}`}
+            </p>
+          ) : null}
+
+          {selectedShelfState.selection || isInferenceSelected ? (
+            <details className="inventory-shelf-targets" open style={{ marginBottom: '1rem' }}>
+              <summary>{selectedShelfPath}</summary>
+              <ShelfItemsSection
+                title="Scanned items"
+                count={selectedShelfState.counts.scanned}
+                total={selectedShelfState.counts.total}
+                items={selectedShelfState.scannedReagents}
+                emptyLabel="No scanned items on this shelf yet."
+              />
+              <ShelfItemsSection
+                title="Unscanned items"
+                count={selectedShelfState.counts.unscanned}
+                total={selectedShelfState.counts.total}
+                items={selectedShelfState.unscannedReagents}
+                emptyLabel="This shelf is fully scanned."
+              />
+              <ShelfItemsSection
+                title="Foreign items"
+                count={selectedShelfState.counts.foreign}
+                total={inventory.reagents.length}
+                items={selectedShelfState.foreignReagents}
+                emptyLabel="No foreign scanned items found."
+              />
+            </details>
+          ) : null}
+
+          {gasEndpoint !== null ? (
+            <div className="foreign-report-panel">
+              <button
+                type="button"
+                className="foreign-report-button"
+                onClick={handleReportForeignItems}
+                disabled={isReportingForeignItems || !canReportForeignItems}
+              >
+                {isReportingForeignItems ? '送信中...' : 'Foreign Itemを報告'}
+              </button>
+
+              {reportState.message ? (
+                <p
+                  className={
+                    reportState.status === 'error' ? 'error-text report-message' : 'status-copy report-message'
+                  }
+                >
+                  {reportState.message}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <ShelfTreePanel
+            groups={pendingShelfGroups}
+            expanded={showUnscannedItems}
+            onToggle={() => setShowUnscannedItems((value) => !value)}
+          />
+        </section>
+      ) : null}
     </main>
   )
 }

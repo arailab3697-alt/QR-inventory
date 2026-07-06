@@ -207,6 +207,106 @@ button.ghost {
   margin-bottom: 0;
 }
 
+.shelf-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.inventory-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.warning-underline {
+  text-decoration-line: underline;
+  text-decoration-color: #ff6b6b;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.help-details {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 9, 14, 0.72);
+}
+
+.help-details summary {
+  cursor: pointer;
+  color: var(--text-strong);
+  font-weight: 700;
+  list-style: none;
+}
+
+.help-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.help-details[open] summary {
+  margin-bottom: 2px;
+}
+
+.help-details-body {
+  display: grid;
+  gap: 12px;
+}
+
+.search-target-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 9, 14, 0.72);
+}
+
+.foreign-report-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(87, 149, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(5, 9, 14, 0.72);
+}
+
+.foreign-report-button {
+  width: fit-content;
+  background: linear-gradient(90deg, #f0b349, #ff6f61);
+  color: #180a04;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.report-message {
+  line-height: 1.55;
+}
+
+.target-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.target-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.target-chip {
+  border: 1px solid rgba(255, 93, 93, 0.4);
+  background: rgba(255, 93, 93, 0.1);
+  color: #ffb0b0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.target-chip:hover {
+  filter: brightness(1.05);
+}
+
 h1,
 h2,
 p,
@@ -387,10 +487,6 @@ h2 {
   background: rgba(71, 230, 177, 0.08);
 }
 
-.focus-card.warn {
-  background: rgba(240, 179, 73, 0.08);
-}
-
 .focus-title {
   color: var(--text-strong);
   font-size: 1.03rem;
@@ -435,9 +531,95 @@ h2 {
   color: var(--text-strong);
 }
 
+.shelf-note {
+  margin-top: 8px;
+}
+
 .inventory-pane {
   display: grid;
   gap: 16px;
+}
+
+.inventory-shelves {
+  display: grid;
+  gap: 12px;
+}
+
+.inventory-shelf {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 9, 14, 0.72);
+  overflow: hidden;
+}
+
+.inventory-shelf-parent {
+  border-color: rgba(87, 149, 255, 0.28);
+}
+
+.inventory-shelf summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+}
+
+.inventory-shelf summary::-webkit-details-marker {
+  display: none;
+}
+
+.inventory-shelf summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.inventory-shelf summary strong {
+  color: var(--text-strong);
+}
+
+.inventory-shelf summary span {
+  font-size: 13px;
+}
+
+.inventory-shelf[open] summary {
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.inventory-shelf-parent[open] > summary {
+  background: rgba(87, 149, 255, 0.08);
+}
+
+.inventory-shelf .inventory-grid {
+  padding: 14px;
+}
+
+.inventory-shelf-children {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.inventory-shelf-direct {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.inventory-shelf-direct-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.inventory-shelf-child {
+  margin-left: 12px;
 }
 
 .inventory-grid {
@@ -470,7 +652,10 @@ h2 {
   .topbar,
   .panel-head,
   .metric-row,
-  .shelf-row > div:first-child {
+  .shelf-row > div:first-child,
+  .inventory-head-actions,
+  .inventory-shelf summary > div,
+  .inventory-shelf-direct-head {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -517,5 +702,21 @@ h2 {
   .scan-actions button,
   .manual-row button {
     width: 100%;
+  }
+
+  .foreign-report-button {
+    width: 100%;
+  }
+
+  .shelf-toggle {
+    width: 100%;
+  }
+
+  .inventory-head-actions {
+    width: 100%;
+  }
+
+  .inventory-shelf-child {
+    margin-left: 0;
   }
 }
